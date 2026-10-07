@@ -1,0 +1,10 @@
+numpy>=1.24
+scipy>=1.10
+rasterio>=1.3
+geopandas>=0.14
+shapely>=2.0
+pyproj>=3.5
+mercantile>=1.2
+pyyaml>=6.0
+pandas>=2.0
+sliderule>=4.0   # ICESat-2 / GEDI access (ground truthing)

@@ -1,0 +1,120 @@
+dem: []
+aoi: null
+aoi_buffer_m: 500
+out: out_dtm
+target_crs: auto-utm
+target_res_m: 8.0
+dem_valid_range_m:
+- -50
+- 4000
+corrections:
+  mode: download
+  landcover_path: null
+  chm_path: null
+  worldcover_url: https://esa-worldcover.s3.eu-central-1.amazonaws.com/v200/2021/map/ESA_WorldCover_10m_2021_v200_{tile}_Map.tif
+  chm_url: https://dataforgood-fb-data.s3.amazonaws.com/forests/v1/alsgedi_global_v6_float/chm/{quadkey}.tif
+  chm_quadkey_zoom: 9
+  chm_min_m: 2.0
+  chm_max_m: 60.0
+  chm_fallback_m:
+    '10': 20.0
+    '95': 12.0
+k_by_class:
+  '10': 0.8
+  '20': 0.5
+  '30': 0.2
+  '40': 0.2
+  '50': 0.0
+  '60': 0.0
+  '70': 0.0
+  '80': 0.0
+  '90': 0.4
+  '95': 0.8
+  '100': 0.0
+k_default: 0.5
+bias_by_class: {}
+bias_default: 0.0
+mask:
+  landcover_classes:
+  - 80
+  - 50
+  vectors: []
+  despike: true
+  despike_window_m: 400
+  despike_threshold_m: 2.5
+smoothing:
+  steps:
+  - method: median
+    window_m: 300
+  - method: gaussian
+    sigma_m: 150
+  fill_max_search_px: 200
+ground:
+  enabled: true
+  fail_on_error: false
+  source: sliderule
+  datasets:
+  - icesat2_atl08
+  t0: '2019-01-01T00:00:00Z'
+  t1: '2025-12-31T23:59:59Z'
+  cache: true
+  simplify_aoi_deg: 0.001
+  icesat2:
+    len: 100.0
+    res: 100.0
+    atl08_class:
+    - atl08_ground
+    - atl08_canopy
+    - atl08_top_of_canopy
+    phoreal:
+      binsize: 1.0
+      geoloc: center
+      use_abs_h: false
+      send_waveform: false
+      above_classifier: false
+    night_only: false
+    min_ground_photons: 10
+  gedi:
+    degrade_flag: 0
+    l2_quality_flag: 1
+    min_sensitivity: 0.95
+  local:
+    path: null
+    lon_col: lon
+    lat_col: lat
+    h_col: h
+    time_col: time
+    source_col: source
+    height_is_ellipsoidal: true
+  datum:
+    mode: pyproj
+    target: EPSG:4326+3855
+    raster_path: null
+    constant_m: 0.0
+  epoch:
+    dem_year: null
+    subsidence_m_per_yr_by_class: {}
+    subsidence_default_m_per_yr: 0.0
+  exclude:
+    landcover_classes:
+    - 80
+    - 50
+    edge_buffer_m: 50
+    use_vector_masks: true
+    max_abs_residual_m: 30.0
+  split:
+    validation_fraction: 0.3
+    block_size_m: 2000
+    seed: 42
+  fit:
+    min_points_per_class: 30
+    bias_from_chm_below_m: 2.0
+    fit_bias_per_class: false
+    k_bounds:
+    - 0.0
+    - 1.0
+    huber_m: 1.5
+outputs:
+  write_intermediates: true
+  compress: deflate
+
