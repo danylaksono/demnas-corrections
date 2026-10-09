@@ -38,6 +38,7 @@ GROUND_DEFAULTS: dict = {
     "t1": "2025-12-31T23:59:59Z",
     "cache": True,                     # reuse <out>/ground_points_raw.gpkg if it exists
     "simplify_aoi_deg": 0.001,         # simplify AOI polygon before sending to SlideRule
+    "tile_deg": 0.5,                   # split larger AOIs into tiles of this size (0 = no tiling)
     "icesat2": {
         "len": 100.0,                  # segment length (m); ATL08 standard is 100 m
         "res": 100.0,                  # step between segments (m)
@@ -80,8 +81,13 @@ GROUND_DEFAULTS: dict = {
         "min_points_per_class": 30,
         "bias_from_chm_below_m": 2.0,  # points with canopy below this define the global bias
         "fit_bias_per_class": False,
+        "joint_intercept": False,      # fit DEM - ground = a[class] + k[class] * chm on all points of a class
         "k_bounds": [0.0, 1.0],
         "huber_m": 1.5,
+    },
+    "diagnostics": {
+        "warn_median_m": 1.0,          # warn when median DEM - ground exceeds this (datum, or points off)
+        "warn_class_spread_m": 1.0,    # warn when low-canopy offsets differ this much between classes
     },
 }
 
@@ -111,6 +117,40 @@ def _year_from_time(series) -> np.ndarray:
 
 
 def fetch_sliderule(aoi_ll, gcfg: dict):
+    """Fetch from SlideRule, splitting a large AOI into tiles. SlideRule refuses requests that
+    match more than 300 ATL03 granules, so a region larger than about 0.5 degrees fails whole."""
+    import geopandas as gpd
+    from shapely.geometry import box
+    tile = float(gcfg.get("tile_deg") or 0)
+    x0, y0, x1, y1 = aoi_ll.bounds
+    if tile <= 0 or max(x1 - x0, y1 - y0) <= tile:
+        return _fetch_one(aoi_ll, gcfg)
+    frames, nfail = [], 0
+    xs = np.arange(x0, x1, tile)
+    ys = np.arange(y0, y1, tile)
+    log.info("SlideRule: AOI split into up to %d tiles of %.2f deg", len(xs) * len(ys), tile)
+    for x in xs:
+        for y in ys:
+            part = aoi_ll.intersection(box(x, y, min(x + tile, x1), min(y + tile, y1)))
+            if part.is_empty or part.area < 1e-6:
+                continue
+            try:
+                g = _fetch_one(part, gcfg)
+            except Exception as e:
+                nfail += 1
+                log.error("SlideRule tile (%.2f, %.2f) failed: %s", x, y, e)
+                continue
+            if len(g):
+                frames.append(g)
+    if nfail:
+        log.warning("SlideRule: %d tile(s) failed; ground points are incomplete", nfail)
+    if not frames:
+        return _empty()
+    df = pd.concat(frames, ignore_index=True)
+    return gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df.lon, df.lat), crs="EPSG:4326")
+
+
+def _fetch_one(aoi_ll, gcfg: dict):
     """Return GeoDataFrame [lon, lat, h_ell, source, time, year] from SlideRule."""
     import geopandas as gpd
     from sliderule import sliderule, icesat2, gedi
@@ -339,6 +379,48 @@ def _huber_slope_origin(xv, yv, c, iters=15):
     return float(k), se
 
 
+def _huber_line(xv, yv, c, iters=15):
+    """Robust y = a + k * x. Returns (a, k, se_k)."""
+    A = np.c_[np.ones(len(xv)), xv]
+    w = np.ones(len(xv))
+    for _ in range(iters):
+        sw = np.sqrt(w)
+        coef, *_ = np.linalg.lstsq(A * sw[:, None], yv * sw, rcond=None)
+        r = yv - A @ coef
+        w = np.where(np.abs(r) <= c, 1.0, c / np.maximum(np.abs(r), 1e-9))
+    cov = np.linalg.pinv((A * w[:, None]).T @ A) * (np.sum(w * r ** 2) / max(len(xv) - 2, 1))
+    return float(coef[0]), float(coef[1]), float(np.sqrt(abs(cov[1, 1])))
+
+
+def datum_diagnostics(df: pd.DataFrame, dcfg: dict, chm_low_m: float) -> dict:
+    """Median DEM - ground per class for low-canopy points. A constant offset shared by all
+    classes points to the vertical datum; offsets that differ by class point to the ground
+    points, the land cover or the DEM itself."""
+    use = df[df["exclude_reason"] == ""]
+    r = (use["dem"] - use["H"]).to_numpy()
+    low = (use["chm"].to_numpy() < chm_low_m)
+    out = {"n_used": int(len(use)), "median_all_m": float(np.median(r)) if len(r) else None,
+           "geoid_n_median_m": float(np.median(df["h_ell"] - df["H"])) if "h_ell" in df else None,
+           "low_canopy_by_class": {}}
+    meds = []
+    for c in sorted({int(v) for v in use["lc"].dropna()}):
+        m = low & (use["lc"].to_numpy() == c)
+        if m.sum() >= 10:
+            med = float(np.median(r[m]))
+            out["low_canopy_by_class"][str(c)] = {
+                "n": int(m.sum()), "median_m": med,
+                "nmad_m": float(1.4826 * np.median(np.abs(r[m] - med)))}
+            meds.append(med)
+    out["class_spread_m"] = float(max(meds) - min(meds)) if len(meds) > 1 else None
+    if out["median_all_m"] is not None and abs(out["median_all_m"]) > float(dcfg["warn_median_m"]):
+        log.warning("median DEM - ground = %.2f m: vertical datum or ground points need checking",
+                    out["median_all_m"])
+    if out["class_spread_m"] is not None and out["class_spread_m"] > float(dcfg["warn_class_spread_m"]):
+        log.warning("low-canopy offset differs by %.2f m between classes: a single global bias "
+                    "will not fit; consider fit.joint_intercept", out["class_spread_m"])
+    return out
+
+
 def fit_k_bias(pts: pd.DataFrame, prior_k: dict, prior_k_default: float, fcfg: dict) -> dict:
     """pts needs columns dem, H, chm, lc. Returns calibration result."""
     r = pts["dem"].to_numpy() - pts["H"].to_numpy()
@@ -363,7 +445,15 @@ def fit_k_bias(pts: pd.DataFrame, prior_k: dict, prior_k_default: float, fcfg: d
         prior = float(prior_k.get(str(cls), prior_k.get(cls, prior_k_default)))
         entry = {"n": n, "prior_k": prior}
         veg = sel & (chm >= float(fcfg["bias_from_chm_below_m"]))
-        if veg.sum() >= int(fcfg["min_points_per_class"]):
+        if (fcfg.get("joint_intercept") and veg.sum() >= int(fcfg["min_points_per_class"])
+                and np.ptp(chm[veg]) > 1.0):
+            a, k, se = _huber_line(chm[veg], r[veg], float(fcfg["huber_m"]))
+            entry.update({"k": float(np.clip(k, kmin, kmax)), "k_raw": k, "k_se": se,
+                          "n_vegetated": int(veg.sum()), "bias": a,
+                          "status": "fitted (joint intercept)"})
+            if not (kmin <= k <= kmax):
+                entry["status"] = "fitted (joint intercept), clipped to bounds"
+        elif veg.sum() >= int(fcfg["min_points_per_class"]):
             bias_c = b0
             if fcfg["fit_bias_per_class"] and (sel & low).sum() >= int(fcfg["min_points_per_class"]):
                 bias_c = _huber_mean(r[sel & low], float(fcfg["huber_m"]))

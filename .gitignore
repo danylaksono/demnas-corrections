@@ -1,0 +1,5 @@
+
+# run outputs (large rasters)
+runs/
+_data_sample/
+__pycache__/

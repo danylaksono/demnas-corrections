@@ -59,6 +59,7 @@ ground:
   t1: '2025-12-31T23:59:59Z'
   cache: true
   simplify_aoi_deg: 0.001
+  tile_deg: 0.5
   icesat2:
     len: 100.0
     res: 100.0
@@ -110,10 +111,14 @@ ground:
     min_points_per_class: 30
     bias_from_chm_below_m: 2.0
     fit_bias_per_class: false
+    joint_intercept: false
     k_bounds:
     - 0.0
     - 1.0
     huber_m: 1.5
+  diagnostics:
+    warn_median_m: 1.0
+    warn_class_spread_m: 1.0
 outputs:
   write_intermediates: true
   compress: deflate

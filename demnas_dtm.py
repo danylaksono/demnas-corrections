@@ -549,7 +549,7 @@ def ground_calibration(cfg, grid, dem, lc, chm, vm, aoi_ll, out):
     pts = gt.get_points(aoi_ll, g, out)
     if len(pts) == 0:
         log.warning("no ground points available; prior k values kept")
-        return None, None
+        return None, None, None
     x, y = gt.to_grid_xy(pts, grid)
     em = gt.edge_mask(lc, float(g["exclude"]["edge_buffer_m"]), grid.res)
     s = gt.sample_arrays(x, y, grid, {"dem": dem, "chm": chm, "lc": lc,
@@ -576,9 +576,10 @@ def ground_calibration(cfg, grid, dem, lc, chm, vm, aoi_ll, out):
     df["exclude_reason"] = reason
     use = reason == ""
     log.info("ground points usable: %d of %d", int(use.sum()), len(df))
-    med = np.nanmedian((df["dem"] - df["H"]).to_numpy()[use]) if use.any() else np.nan
-    if np.isfinite(med) and abs(med) > 20:
-        log.warning("median DEM - ground = %.1f m: check the vertical datum settings", med)
+    log.info("exclusions: %s", df.loc[~use, "exclude_reason"].value_counts().to_dict())
+    diag = gt.datum_diagnostics(df, g["diagnostics"], float(g["fit"]["bias_from_chm_below_m"]))
+    with open(out / "datum_diagnostics.json", "w", encoding="utf-8") as f:
+        json.dump(diag, f, indent=2)
 
     df["split"] = ""
     if use.any():
@@ -597,7 +598,7 @@ def ground_calibration(cfg, grid, dem, lc, chm, vm, aoi_ll, out):
     if calib:
         with open(out / "calibration.json", "w", encoding="utf-8") as f:
             json.dump(calib, f, indent=2)
-    return calib, gdf
+    return calib, gdf, diag
 
 
 def ground_validation(gpts, grid, surfaces: dict, out) -> list | None:
@@ -645,10 +646,10 @@ def run(cfg: dict) -> dict:
     dtm_prior, _, _ = correct(cfg["k_by_class"], cfg["k_default"], cfg["bias_by_class"], cfg["bias_default"])
 
     # ground truthing: fit k and bias, then apply
-    calib, gpts = None, None
+    calib, gpts, diag = None, None, None
     if cfg["ground"]["enabled"] and cfg["ground"]["source"] != "none":
         try:
-            calib, gpts = ground_calibration(cfg, grid, dem, lc, chm, vm, aoi_ll, out)
+            calib, gpts, diag = ground_calibration(cfg, grid, dem, lc, chm, vm, aoi_ll, out)
         except Exception as e:
             if cfg["ground"]["fail_on_error"]:
                 raise
@@ -722,6 +723,7 @@ def run(cfg: dict) -> dict:
         "stats": {"dem": stats(dem), "correction_m": stats(np.where(np.isfinite(dem), correction, np.nan)),
                   "dtm_smooth": stats(smoothed), "residual": stats(residual)},
         "calibration": calib,
+        "datum_diagnostics": diag,
         "validation_all_classes": validation,
         "k_used": {k_: float(v) for k_, v in k_table.items()},
         "config": cfg,

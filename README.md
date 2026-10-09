@@ -104,6 +104,8 @@ Land cover classes follow ESA WorldCover codes (10 tree cover, 20 shrubland, 80 
 | `ground.datum.mode` | pyproj (EGM2008) | must match the DEM's vertical datum |
 | `ground.split.block_size_m` | 2000 | spatial block size for the calibration/validation split |
 | `ground.fit.min_points_per_class` | 30 | below this, the prior k is kept |
+| `ground.fit.joint_intercept` | false | true = fit `DEM − ground = a + k × canopy` per class instead of one global bias. Use when `datum_diagnostics.json` shows offsets that differ by class |
+| `ground.diagnostics.warn_median_m` | 1.0 | warn when the median DEM − ground exceeds this (datum or ground point problem) |
 | `ground.fail_on_error` | false | true = stop if ground truthing fails |
 
 Smoothing methods, combinable in any order:
@@ -125,6 +127,7 @@ Smoothing methods, combinable in any order:
 | `ground_points_raw.gpkg` | Ground points as fetched (cache) |
 | `ground_points.gpkg` | All points with datum-corrected height, samples, `exclude_reason`, `split` and errors for each surface |
 | `calibration.json` | Fitted k (with standard error and point counts) and bias per class |
+| `datum_diagnostics.json` | Median geoid undulation, median DEM − ground, and low-canopy offset per class |
 | `validation.csv` | Error statistics on validation points per surface and class |
 | `run_report.json` | Config snapshot, sources actually used, k values applied, calibration and validation summary, runtime |
 
